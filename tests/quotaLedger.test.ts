@@ -233,7 +233,7 @@ describe('sortLedgerRows', () => {
   ];
 
   test('reset: soonest weekly reset first, rows without one at the bottom in order', () => {
-    expect(sortLedgerRows(rows, 'reset').map((r) => r.key)).toEqual([
+    expect(sortLedgerRows(rows, 'reset', NOW).map((r) => r.key)).toEqual([
       'soon',
       'mid',
       'late',
@@ -243,7 +243,7 @@ describe('sortLedgerRows', () => {
   });
 
   test('remaining: most remaining first, unloaded last', () => {
-    expect(sortLedgerRows(rows, 'remaining').map((r) => r.key)).toEqual([
+    expect(sortLedgerRows(rows, 'remaining', NOW).map((r) => r.key)).toEqual([
       'no-reset',
       'late',
       'mid',
@@ -252,13 +252,30 @@ describe('sortLedgerRows', () => {
     ]);
   });
 
+  test('reset: a reset that already passed sinks with the rows that have none', () => {
+    const withPast = [
+      row('passed', window('weekly', 0, NOW - DAY)),
+      row('soon', window('weekly', 30, NOW + DAY)),
+      row('unloaded', null),
+      row('at-now', window('weekly', 10, NOW)),
+      row('late', window('weekly', 90, NOW + 4 * DAY)),
+    ];
+    expect(sortLedgerRows(withPast, 'reset', NOW).map((r) => r.key)).toEqual([
+      'soon',
+      'late',
+      'passed',
+      'unloaded',
+      'at-now',
+    ]);
+  });
+
   test('ties keep the incoming order', () => {
     const tied = [
       row('x', window('weekly', 50, NOW + DAY)),
       row('y', window('weekly', 50, NOW + DAY)),
     ];
-    expect(sortLedgerRows(tied, 'reset').map((r) => r.key)).toEqual(['x', 'y']);
-    expect(sortLedgerRows(tied, 'remaining').map((r) => r.key)).toEqual(['x', 'y']);
+    expect(sortLedgerRows(tied, 'reset', NOW).map((r) => r.key)).toEqual(['x', 'y']);
+    expect(sortLedgerRows(tied, 'remaining', NOW).map((r) => r.key)).toEqual(['x', 'y']);
   });
 
   test('sections sort rows and put the headline window first in each row', () => {
@@ -275,6 +292,25 @@ describe('sortLedgerRows', () => {
       'five-hour',
       'seven-day',
     ]);
+  });
+  test('a cached figure whose weekly reset passed does not lead its section', () => {
+    const entries = [
+      entry('claude-a@one.dev.json', 'claude'),
+      entry('claude-b@two.gg.json', 'claude'),
+      entry('claude-c@three.gg.json', 'claude'),
+    ];
+    const states = {
+      'claude-a@one.dev.json': claudeQuota(42, 21, 0, 1),
+      'claude-b@two.gg.json': claudeQuota(10, 5, 0, 4),
+      'claude-c@three.gg.json': claudeQuota(100, 100, 0, -1),
+    };
+    const [section] = buildLedgerSections(entries, quotaFor(states), 'reset', NOW);
+    expect(section.rows.map((r) => r.key)).toEqual([
+      'claude-a@one.dev.json',
+      'claude-b@two.gg.json',
+      'claude-c@three.gg.json',
+    ]);
+    expect(section.summary.primary?.soonestResetMs).toBe(NOW + DAY);
   });
 });
 

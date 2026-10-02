@@ -377,10 +377,22 @@ export function pickPrimaryWindowId(
  * quota is the first to be lost. `remaining`: the most headline quota left
  * first. Rows with no figure (not loaded, failed, no reset pending) sink to the
  * bottom in their incoming order; the incoming index is the final tiebreak.
+ *
+ * A reset at or before `nowMs` counts as no reset. Quotas are cached for the
+ * session, so a page left open past a reset still holds the old figure; that
+ * row must not lead the list.
  */
-export function sortLedgerRows(rows: readonly LedgerRow[], mode: LedgerSortMode): LedgerRow[] {
+export function sortLedgerRows(
+  rows: readonly LedgerRow[],
+  mode: LedgerSortMode,
+  nowMs: number
+): LedgerRow[] {
+  const upcomingReset = (row: LedgerRow): number | null => {
+    const resetAtMs = row.primary?.resetAtMs ?? null;
+    return resetAtMs !== null && resetAtMs > nowMs ? resetAtMs : null;
+  };
   const keyOf = (row: LedgerRow): number | null =>
-    mode === 'reset' ? (row.primary?.resetAtMs ?? null) : (row.primary?.remaining ?? null);
+    mode === 'reset' ? upcomingReset(row) : (row.primary?.remaining ?? null);
 
   return rows
     .map((row, index) => ({ row, index, key: keyOf(row) }))
@@ -526,7 +538,7 @@ export function buildLedgerSections(
       };
     });
 
-    const sorted = sortLedgerRows(rows, sortMode);
+    const sorted = sortLedgerRows(rows, sortMode, nowMs);
     return {
       provider,
       rows: sorted,
