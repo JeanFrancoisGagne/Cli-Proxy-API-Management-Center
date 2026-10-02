@@ -119,6 +119,7 @@
   }
 }
 
+.view,
 .sort {
   flex: 0 0 auto;
   min-width: 148px;
@@ -142,9 +143,15 @@
   }
 }
 
+/* 视图切换（账本两种排序 / 卡片）挂在 tabs 行右端 */
+.view {
+  min-width: 196px;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .clearSearch:hover,
-  .sort button[aria-haspopup='listbox']:hover {
+  .sort button[aria-haspopup='listbox']:hover,
+  .view button[aria-haspopup='listbox']:hover {
     background: var(--bg-tertiary);
     color: var(--text-primary);
   }
@@ -167,7 +174,8 @@
     height: 36px;
   }
 
-  .sort button[aria-haspopup='listbox'] {
+  .sort button[aria-haspopup='listbox'],
+  .view button[aria-haspopup='listbox'] {
     height: 40px;
   }
 }

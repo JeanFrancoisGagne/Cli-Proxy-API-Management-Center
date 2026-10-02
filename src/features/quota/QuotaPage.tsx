@@ -1,5 +1,8 @@
 /**
- * 额度查询页：提供商 tabs + 统一卡网格。
+ * 额度查询页：提供商 tabs + 两种视图。
+ * - 账本（默认）：每提供商汇总卡 + 每凭证一行，按周窗口最早重置或剩余最多排序；
+ * - 卡片：统一卡网格 + 重置时间线。
+ * 凭证名里的邮箱默认打码，页头开关切换。
  *
  * 保留的行为契约（重设计不改）：
  * - 现有提供商保持点击加载；Devin 首次可见时主动查询一次，不轮询；
@@ -21,19 +24,24 @@ import { useNow } from '@/hooks/useNow';
 import { useRevealGroup } from '@/hooks/motion';
 import { useAuthStore, useQuotaStore, useThemeStore } from '@/stores';
 import type { AuthFileItem, ResolvedTheme } from '@/types';
-import { getQuotaCacheKey } from '@/utils/quota/identity';
+import { getQuotaCacheKey, getQuotaDisplayName } from '@/utils/quota/identity';
 import { ProviderTabs } from '@/features/authFiles/components/ProviderTabs';
 import { QuotaHeader } from './components/QuotaHeader';
 import { QuotaCard } from './components/QuotaCard';
+import { QuotaLedger } from './components/QuotaLedger';
 import { QuotaTimeline } from './components/QuotaTimeline';
 import {
   CARD_ENTRANCE_BUDGET_MS,
+  DEFAULT_QUOTA_VIEW_MODE,
   QUOTA_PAGE_SIZE,
   QUOTA_SORT_MODES,
   QUOTA_TAB_ORDER,
+  QUOTA_VIEW_MODES,
   type QuotaSortMode,
   type QuotaTabId,
+  type QuotaViewMode,
 } from './constants';
+import { maskCredentialName } from './credentialMask';
 import {
   buildTabCounts,
   canRefreshQuotaAfterList,
@@ -56,11 +64,11 @@ import styles from './QuotaPage.module.scss';
 const TAB_IDS: string[] = ['all', ...QUOTA_TAB_ORDER];
 const SKELETON_CARD_COUNT = 6;
 
-/**
- * Existing providers display filenames; Devin's card and timeline share an
- * identity-aware display label. Keep the filename fallback stable for memoization.
- */
-const displayNameFor = (name: string) => name;
+const VIEW_LABEL_KEYS: Record<QuotaViewMode, string> = {
+  'ledger-reset': 'quota_management.view_ledger_reset',
+  'ledger-remaining': 'quota_management.view_ledger_remaining',
+  cards: 'quota_management.view_cards',
+};
 
 export function QuotaPage() {
   const { t } = useTranslation();
@@ -74,6 +82,11 @@ export function QuotaPage() {
   const [sortMode, setSortMode] = useState<QuotaSortMode>(
     () => readQuotaUiState()?.sortMode ?? 'default'
   );
+  const [view, setView] = useState<QuotaViewMode>(
+    () => readQuotaUiState()?.view ?? DEFAULT_QUOTA_VIEW_MODE
+  );
+  // Not persisted: every visit starts with emails masked.
+  const [showEmails, setShowEmails] = useState(false);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -154,6 +167,21 @@ export function QuotaPage() {
     [quotaByType]
   );
 
+  /* ---------- 邮箱打码 ----------
+   * Devin 的卡片与时间线用带身份的显示名；其余提供商显示文件名。 */
+
+  const nameFor = useCallback(
+    (file: AuthFileItem) => {
+      const name = getQuotaDisplayName(file);
+      return showEmails ? name : maskCredentialName(name, file.email);
+    },
+    [showEmails]
+  );
+  const displayNameFor = useCallback(
+    (name: string) => (showEmails ? name : maskCredentialName(name)),
+    [showEmails]
+  );
+
   /* ---------- 归类 / 过滤 / 排序 / 分页 ---------- */
 
   // 只在「最快恢复优先」下订阅分钟时钟。默认序下不门控的话，pageItems 每分钟
@@ -187,6 +215,10 @@ export function QuotaPage() {
     [sortedEntries, page]
   );
 
+  // 账本列出当前 tab + 搜索命中的全部凭证（不分页），排序由账本按自己的规则做。
+  const isLedger = view !== 'cards';
+  const visibleEntries = isLedger ? filteredEntries : pageItems;
+
   const handleTabChange = useCallback((next: string) => {
     setTab(next as QuotaTabId);
     setPage(1);
@@ -199,9 +231,19 @@ export function QuotaPage() {
     writeQuotaUiState({ sortMode: next as QuotaSortMode });
   }, []);
 
+  const handleViewChange = useCallback((next: string) => {
+    setView(next as QuotaViewMode);
+    writeQuotaUiState({ view: next as QuotaViewMode });
+  }, []);
+
   const sortOptions = useMemo(
     () =>
       QUOTA_SORT_MODES.map((mode) => ({ value: mode, label: t(`quota_management.sort_${mode}`) })),
+    [t]
+  );
+
+  const viewOptions = useMemo(
+    () => QUOTA_VIEW_MODES.map((mode) => ({ value: mode, label: t(VIEW_LABEL_KEYS[mode]) })),
     [t]
   );
 
@@ -242,6 +284,19 @@ export function QuotaPage() {
   const { batchLoading, loadQuota } = useQuotaBatchLoader();
   const { resettingQuotaName, refreshQuota, resetQuota } = useQuotaActions(disableControls);
 
+  // 账本一次刷新整个 tab：按页大小分批串行，上游并发仍不超过 QUOTA_PAGE_SIZE；
+  // 会话切换后剩余批次作废。
+  const loadQuotaInPages = useCallback(
+    async (targets: QuotaFileEntry[]) => {
+      const session = useQuotaStore.getState().cacheGeneration;
+      for (let start = 0; start < targets.length; start += QUOTA_PAGE_SIZE) {
+        if (useQuotaStore.getState().cacheGeneration !== session) return;
+        await loadQuota(targets.slice(start, start + QUOTA_PAGE_SIZE));
+      }
+    },
+    [loadQuota]
+  );
+
   const pendingRefreshRef = useRef<number | null>(null);
   const prevLoadingRef = useRef(loading);
 
@@ -274,12 +329,20 @@ export function QuotaPage() {
         disableControls
       )
     ) {
-      void loadQuota(pageItems);
+      void loadQuotaInPages(visibleEntries);
     }
-  }, [disableControls, error, filesGeneration, loading, loadQuota, pageItems, sessionGeneration]);
+  }, [
+    disableControls,
+    error,
+    filesGeneration,
+    loading,
+    loadQuotaInPages,
+    visibleEntries,
+    sessionGeneration,
+  ]);
 
   useDevinQuotaAutoLoad(
-    pageItems,
+    visibleEntries,
     disableControls ||
       loading ||
       batchLoading ||
@@ -320,6 +383,8 @@ export function QuotaPage() {
         attentionCount={attentionCount}
         refreshing={loading || batchLoading}
         disableControls={disableControls}
+        showEmails={showEmails}
+        onToggleEmails={() => setShowEmails((value) => !value)}
         onRefreshAll={handleRefreshAll}
       />
 
@@ -333,6 +398,15 @@ export function QuotaPage() {
             resolvedTheme={resolvedTheme}
             onChange={handleTabChange}
           />
+          <div className={styles.view}>
+            <Select
+              value={view}
+              options={viewOptions}
+              onChange={handleViewChange}
+              ariaLabel={t('quota_management.view_label')}
+              size="sm"
+            />
+          </div>
         </div>
 
         <div className={styles.toolbar}>
@@ -362,15 +436,17 @@ export function QuotaPage() {
               </button>
             )}
           </div>
-          <div className={styles.sort}>
-            <Select
-              value={sortMode}
-              options={sortOptions}
-              onChange={handleSortModeChange}
-              ariaLabel={t('quota_management.sort_label')}
-              size="sm"
-            />
-          </div>
+          {!isLedger && (
+            <div className={styles.sort}>
+              <Select
+                value={sortMode}
+                options={sortOptions}
+                onChange={handleSortModeChange}
+                ariaLabel={t('quota_management.sort_label')}
+                size="sm"
+              />
+            </div>
+          )}
         </div>
 
         {error && (
@@ -413,6 +489,18 @@ export function QuotaPage() {
               )
             }
           />
+        ) : isLedger ? (
+          <QuotaLedger
+            entries={filteredEntries}
+            quotaFor={getQuota}
+            sortMode={view === 'ledger-remaining' ? 'remaining' : 'reset'}
+            nameFor={nameFor}
+            resolvedTheme={resolvedTheme}
+            canRefresh={canUseActions}
+            onRefresh={(entry) =>
+              void refreshQuota(entry.file, QUOTA_ADAPTERS[entry.type], nameFor(entry.file))
+            }
+          />
         ) : (
           <div className={styles.grid}>
             {pageItems.map((entry, index) => (
@@ -423,15 +511,18 @@ export function QuotaPage() {
                 resolvedTheme={resolvedTheme}
                 canRefresh={canUseActions && !entry.file.disabled}
                 resetting={resettingQuotaName === getQuotaCacheKey(entry.file)}
+                displayName={nameFor(entry.file)}
                 entranceDelayMs={cardEntranceDelay(index)}
-                onRefresh={() => void refreshQuota(entry.file, QUOTA_ADAPTERS[entry.type])}
+                onRefresh={() =>
+                  void refreshQuota(entry.file, QUOTA_ADAPTERS[entry.type], nameFor(entry.file))
+                }
                 onReset={() => resetQuota(entry.file, QUOTA_ADAPTERS[entry.type])}
               />
             ))}
           </div>
         )}
 
-        {!loading && filteredEntries.length > QUOTA_PAGE_SIZE && (
+        {!isLedger && !loading && filteredEntries.length > QUOTA_PAGE_SIZE && (
           <div className={styles.pagination}>
             <Button
               variant="secondary"
@@ -460,12 +551,14 @@ export function QuotaPage() {
         )}
 
         {/* 时间线只比较当前页凭证，避免大量凭证一次性生成无界泳道。 */}
-        <QuotaTimeline
-          entries={pageItems}
-          quotaFor={getQuota}
-          displayNameFor={displayNameFor}
-          resolvedTheme={resolvedTheme}
-        />
+        {!isLedger && (
+          <QuotaTimeline
+            entries={pageItems}
+            quotaFor={getQuota}
+            displayNameFor={displayNameFor}
+            resolvedTheme={resolvedTheme}
+          />
+        )}
       </section>
     </div>
   );

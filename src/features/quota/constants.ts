@@ -21,5 +21,16 @@ export const QUOTA_SORT_MODES = ['default', 'soonest'] as const;
 
 export type QuotaSortMode = (typeof QUOTA_SORT_MODES)[number];
 
+/**
+ * Page views. The ledger (summary cards + one row per credential) comes in two
+ * orders: soonest weekly reset first (default) or most remaining first. The
+ * card grid keeps its own sort control.
+ */
+export const QUOTA_VIEW_MODES = ['ledger-reset', 'ledger-remaining', 'cards'] as const;
+
+export type QuotaViewMode = (typeof QUOTA_VIEW_MODES)[number];
+
+export const DEFAULT_QUOTA_VIEW_MODE: QuotaViewMode = 'ledger-reset';
+
 /** 与 useRevealGroup 的 GROUP_MAX_TOTAL 一致：卡片级联总预算 360ms。 */
 export const CARD_ENTRANCE_BUDGET_MS = 360;

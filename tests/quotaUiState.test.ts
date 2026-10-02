@@ -63,9 +63,24 @@ describe('quota ui state', () => {
     expect(readQuotaUiState()).toEqual({ tab: 'kimi', sortMode: 'soonest' });
   });
 
+  test('round-trips the view and keeps it across tab and sort writes', () => {
+    writeQuotaUiState({ view: 'ledger-remaining' });
+    writeQuotaUiState({ tab: 'claude' });
+    writeQuotaUiState({ sortMode: 'soonest' });
+
+    expect(readQuotaUiState()).toEqual({
+      tab: 'claude',
+      sortMode: 'soonest',
+      view: 'ledger-remaining',
+    });
+  });
+
   test('rejects values that are not part of the current contract', () => {
-    storage.setItem(KEY, JSON.stringify({ tab: 'not-a-tab', sortMode: 'by-vibes' }));
-    expect(readQuotaUiState()).toEqual({ tab: undefined, sortMode: undefined });
+    storage.setItem(
+      KEY,
+      JSON.stringify({ tab: 'not-a-tab', sortMode: 'by-vibes', view: 'spreadsheet' })
+    );
+    expect(readQuotaUiState()).toEqual({ tab: undefined, sortMode: undefined, view: undefined });
   });
 
   test('survives absent, malformed, and non-object payloads', () => {
