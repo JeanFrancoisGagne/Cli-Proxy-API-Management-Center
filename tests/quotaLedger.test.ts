@@ -111,11 +111,11 @@ describe('extractLedgerWindows', () => {
   test('converts percent used into percent remaining', () => {
     const windows = extractLedgerWindows('claude', claudeQuota(42, 21, 0, 2));
     expect(windows.map((w) => [w.id, w.remaining])).toEqual([
-      ['five-hour', 100],
       ['seven-day', 79],
+      ['five-hour', 100],
       ['seven-day-fable', 58],
     ]);
-    expect(windows[0].resetAtMs).toBeNull();
+    expect(windows.find((window) => window.id === 'five-hour')?.resetAtMs).toBeNull();
   });
 
   test('reads Kimi counts, Antigravity fractions, and Meta seconds', () => {
@@ -164,11 +164,12 @@ describe('extractLedgerWindows', () => {
 });
 
 describe('pickPrimaryWindowId', () => {
-  test('prefers the Fable bucket, then the general weekly limit', () => {
+  test('prefers the all-model weekly limit, then session, before scoped model limits', () => {
     const fable = [window('five-hour', 100, null), window('seven-day-fable', 50, 1)];
     const general = [window('five-hour', 100, null), window('seven-day', 50, 1)];
-    expect(pickPrimaryWindowId('claude', [general, fable])).toBe('seven-day-fable');
+    expect(pickPrimaryWindowId('claude', [general, fable])).toBe('seven-day');
     expect(pickPrimaryWindowId('claude', [general])).toBe('seven-day');
+    expect(pickPrimaryWindowId('claude', [fable])).toBe('five-hour');
     expect(pickPrimaryWindowId('claude', [])).toBeNull();
   });
 
@@ -198,7 +199,10 @@ describe('summary math', () => {
       ])
     );
     const [section] = buildLedgerSections(entries, quotaFor(states), 'reset', NOW);
-    expect(section.summary.primary?.remainingSum).toBe(894);
+    expect(section.summary.primary).toMatchObject({ id: 'seven-day', remainingSum: 49 });
+    expect(
+      section.summary.secondary.find((window) => window.id === 'seven-day-fable')?.remainingSum
+    ).toBe(894);
     expect(section.summary.availability).toMatchObject({
       available: 0,
       blocked: 9,
@@ -215,7 +219,7 @@ describe('summary math', () => {
     );
   });
 
-  test('requires both shared windows and a current model allowance before counting an account', () => {
+  test('counts overall shared capacity separately from model-specific exhaustion', () => {
     const states = {
       ready: claudeQuota(5, 20, 0, 2),
       modelBlocked: claudeQuota(100, 20, 0, 2),
@@ -227,8 +231,8 @@ describe('summary math', () => {
     const entries = Object.keys(states).map((name) => entry(name, 'claude'));
     const [section] = buildLedgerSections(entries, quotaFor(states), 'remaining', NOW);
     expect(section.summary.availability).toMatchObject({
-      available: 1,
-      blocked: 2,
+      available: 2,
+      blocked: 1,
       unknown: 3,
       nextResetAtMs: NOW + 2 * DAY,
     });
@@ -238,8 +242,7 @@ describe('summary math', () => {
       resetAtMs: NOW + 2 * DAY,
     });
     expect(section.rows.find((item) => item.key === 'modelBlocked')?.availability).toMatchObject({
-      status: 'blocked',
-      windowIds: ['seven-day-fable'],
+      status: 'available',
     });
     expect(section.rows.find((item) => item.key === 'stale')?.availability).toEqual({
       status: 'unknown',
@@ -267,17 +270,23 @@ describe('summary math', () => {
     const [section] = buildLedgerSections(CLAUDE_ENTRIES, quotaFor(CLAUDE_STATES), 'reset', NOW);
     expect(section.summary.capacity).toBe(500);
     expect(section.summary.primary).toMatchObject({
-      id: 'seven-day-fable',
-      remainingSum: 409,
+      id: 'seven-day',
+      remainingSum: 454,
       reporting: 5,
       soonestResetMs: NOW + 1 * DAY,
     });
-    expect(section.summary.secondary[0]).toMatchObject({ id: 'seven-day', remainingSum: 454 });
+    expect(section.summary.secondary[1]).toMatchObject({
+      id: 'seven-day-fable',
+      remainingSum: 409,
+    });
   });
 
-  test('lists weekly secondary windows before shorter ones', () => {
+  test('lists the shared session before secondary scoped model windows', () => {
     const [section] = buildLedgerSections(CLAUDE_ENTRIES, quotaFor(CLAUDE_STATES), 'reset', NOW);
-    expect(section.summary.secondary.map((total) => total.id)).toEqual(['seven-day', 'five-hour']);
+    expect(section.summary.secondary.map((total) => total.id)).toEqual([
+      'five-hour',
+      'seven-day-fable',
+    ]);
   });
 
   test('unloaded credentials count toward the ceiling but not the sum', () => {
@@ -370,9 +379,9 @@ describe('sortLedgerRows', () => {
       'claude-e@five.gg.json',
     ]);
     expect(section.rows[0].windows.map((w) => w.id)).toEqual([
-      'seven-day-fable',
-      'five-hour',
       'seven-day',
+      'five-hour',
+      'seven-day-fable',
     ]);
   });
   test('a cached figure whose weekly reset passed does not lead its section', () => {
@@ -439,6 +448,40 @@ describe('sections and helpers', () => {
 describe('QuotaLedger rendering', () => {
   beforeAll(async () => {
     await i18n.changeLanguage('en');
+  });
+
+  test('shows overall weekly and session caps before Fable in the overview and account row', () => {
+    const [section] = buildLedgerSections(
+      [entry('overall.json', 'claude')],
+      quotaFor({ 'overall.json': claudeQuota(100, 20, 0, 1) }),
+      'reset',
+      NOW
+    );
+    expect(section.rows[0].windows.map((window) => window.id)).toEqual([
+      'seven-day',
+      'five-hour',
+      'seven-day-fable',
+    ]);
+    const markup = renderToStaticMarkup(
+      createElement(QuotaLedger, {
+        entries: [entry('overall.json', 'claude')],
+        quotaFor: quotaFor({ 'overall.json': claudeQuota(100, 20, 0, 1) }) as never,
+        sortMode: 'reset',
+        nameFor: (file: AuthFileItem) => file.name,
+        resolvedTheme: 'dark',
+        canRefresh: true,
+        onRefresh: () => {},
+        now: NOW,
+      })
+    );
+    const overview = markup.slice(0, markup.indexOf('</article>'));
+    expect(overview).toContain('Usable accounts · 7-day limit');
+    expect(overview.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).toContain('1 of 1');
+    expect(overview).toContain('0 blocked');
+    expect(markup).toContain('Included quota blocked: 7-day Fable 5');
+    expect(overview.indexOf('5-hour limit')).toBeGreaterThan(overview.indexOf('7-day limit'));
+    expect(overview.indexOf('7-day Fable 5')).toBeGreaterThan(overview.indexOf('5-hour limit'));
+    expect(overview).not.toContain('aria-expanded');
   });
 
   test('labels blocked Claude capacity instead of presenting scoped allowance as usable', () => {

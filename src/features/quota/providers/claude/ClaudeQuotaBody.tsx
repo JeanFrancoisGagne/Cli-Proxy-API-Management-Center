@@ -11,7 +11,11 @@ import { QuotaMeter } from '../../components/QuotaMeter';
 import { QuotaResetLabel } from '../../components/QuotaResetLabel';
 import { collectQuotaRowInstants, pickUrgentRowId } from '../../resetSchedule';
 import type { QuotaBodyProps } from '../../types';
-import { getClaudeQuotaAvailability } from './availability';
+import {
+  CLAUDE_PRIMARY_WINDOW_IDS,
+  getClaudeQuotaAvailability,
+  orderClaudeWindows,
+} from './availability';
 import { ClaudeAvailabilityNotice } from './ClaudeAvailabilityNotice';
 
 export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaState>) {
@@ -21,7 +25,7 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
     () => pickUrgentRowId(collectQuotaRowInstants('claude', quota), now),
     [quota, now]
   );
-  const windows = quota.windows ?? [];
+  const windows = orderClaudeWindows(quota.windows ?? []);
   const extraUsage = quota.extraUsage ?? null;
   const planType = quota.planType ?? null;
 
@@ -84,6 +88,17 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
                   )}
                 </div>
               </div>
+              {remaining === 0 && !CLAUDE_PRIMARY_WINDOW_IDS.some((id) => id === window.id) && (
+                <ClaudeAvailabilityNotice
+                  availability={getClaudeQuotaAvailability(windows, now, window.id)}
+                  windowLabel={(id) => {
+                    const candidate = windows.find((item) => item.id === id);
+                    return candidate?.labelKey ? t(candidate.labelKey) : (candidate?.label ?? id);
+                  }}
+                  nowMs={now}
+                  className={classes.quotaMessage}
+                />
+              )}
               <QuotaMeter percent={remaining} classes={classes} index={index} />
             </div>
           );

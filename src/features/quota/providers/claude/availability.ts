@@ -1,6 +1,15 @@
 import type { ClaudeQuotaWindow } from '@/types';
 
-export const CLAUDE_PRIMARY_WINDOW_IDS = ['seven-day-fable', 'seven-day'] as const;
+export const CLAUDE_PRIMARY_WINDOW_IDS = ['seven-day', 'five-hour'] as const;
+
+/** Shared account limits lead; model allowances keep their incoming order afterward. */
+export function orderClaudeWindows<T extends { id: string }>(windows: readonly T[]): T[] {
+  const priority = (id: string) => {
+    const index = CLAUDE_PRIMARY_WINDOW_IDS.findIndex((candidate) => candidate === id);
+    return index < 0 ? CLAUDE_PRIMARY_WINDOW_IDS.length : index;
+  };
+  return [...windows].sort((a, b) => priority(a.id) - priority(b.id));
+}
 
 export type ClaudeAvailability =
   | { status: 'available' }
@@ -94,7 +103,8 @@ export function getClaudeAvailability(
 
 export function getClaudeQuotaAvailability(
   windows: readonly ClaudeQuotaWindow[],
-  nowMs: number
+  nowMs: number,
+  modelWindowId?: string
 ): ClaudeAvailability {
   return getClaudeAvailability(
     windows.map((window) => ({
@@ -106,6 +116,7 @@ export function getClaudeQuotaAvailability(
       resetAtMs: window.resetAtMs ?? null,
     })),
     nowMs,
-    CLAUDE_PRIMARY_WINDOW_IDS.find((id) => windows.some((window) => window.id === id))
+    modelWindowId ??
+      CLAUDE_PRIMARY_WINDOW_IDS.find((id) => windows.some((window) => window.id === id))
   );
 }

@@ -257,6 +257,14 @@ describe('ClaudeQuotaBody', () => {
         ],
       };
       const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+      const weeklyRow = markup.indexOf('<span class="quotaModel">7-day</span>');
+      const sessionRow = markup.indexOf('<span class="quotaModel">5-hour</span>');
+      const modelRow = markup.indexOf('<span class="quotaModel">Fable</span>');
+      expect(weeklyRow).toBeLessThan(sessionRow);
+      expect(sessionRow).toBeLessThan(modelRow);
+      if (sessionUsed === 0) {
+        expect(markup.slice(0, weeklyRow)).not.toContain('Included quota blocked');
+      }
       expect(markup).toContain(
         `Included quota blocked: ${sessionUsed === 100 ? '5-hour, ' : ''}Fable`
       );

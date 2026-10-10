@@ -21,6 +21,7 @@ import { codexPlanLabelKey } from '@/utils/quota/planTier';
 import {
   CLAUDE_PRIMARY_WINDOW_IDS,
   getClaudeAvailability,
+  orderClaudeWindows,
   summarizeClaudeAvailability,
   type ClaudeAvailability,
   type ClaudeAvailabilitySummary,
@@ -90,7 +91,7 @@ export interface LedgerSummary {
   primary: LedgerWindowTotal | null;
   /** One segment per credential, in row order. */
   segments: LedgerSegment[];
-  /** Other windows: weekly or longer first, then shorter ones. */
+  /** Claude shared caps lead model allowances; other providers list longer windows first. */
   secondary: LedgerWindowTotal[];
   availability: ClaudeAvailabilitySummary | null;
 }
@@ -172,7 +173,8 @@ export function extractLedgerWindows(provider: QuotaProviderType, quota: unknown
   if (!state || state.status !== 'success') return [];
 
   if (provider === 'claude' || provider === 'codex') {
-    return fromUsedWindows((quota as { windows?: UsedWindowLike[] }).windows);
+    const windows = fromUsedWindows((quota as { windows?: UsedWindowLike[] }).windows);
+    return provider === 'claude' ? orderClaudeWindows(windows) : windows;
   }
 
   if (provider === 'devin') {
@@ -453,7 +455,7 @@ const totalFor = (
 /**
  * Sum one provider's credentials into its summary card.
  *
- * Claude counts accounts whose shared and headline-model allowances permit
+ * Claude counts accounts whose shared overall allowances permit
  * use. Its window totals remain allowance detail: different budgets cannot be
  * added or compared to produce effective token capacity.
  */
@@ -487,7 +489,7 @@ export function summarizeLedger(
     capacity: rows.length * 100,
     primary: primaryId === null ? null : totalFor(primaryId, rows, nowMs),
     segments: rows.map((row) => ({ key: row.key, remaining: row.primary?.remaining ?? null })),
-    secondary,
+    secondary: provider === 'claude' ? orderClaudeWindows(secondary) : secondary,
     availability: provider === 'claude' ? summarizeClaudeAvailability(rows) : null,
   };
 }

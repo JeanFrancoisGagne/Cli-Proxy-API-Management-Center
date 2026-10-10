@@ -34,6 +34,11 @@ import { QUOTA_ADAPTERS, type QuotaCardState } from '../providers';
 import type { QuotaProviderType } from '../providers/types';
 import styles from './QuotaLedger.module.scss';
 import { ClaudeAvailabilityNotice } from '../providers/claude/ClaudeAvailabilityNotice';
+import {
+  CLAUDE_PRIMARY_WINDOW_IDS,
+  getClaudeAvailability,
+  type ClaudeAvailability,
+} from '../providers/claude/availability';
 
 const WEEK_HOURS = 24 * 7;
 
@@ -196,8 +201,8 @@ function SummaryCard({ section, resolvedTheme, now }: SummaryCardProps) {
   const primary = summary.primary;
   const availability = summary.availability;
 
-  // A second weekly bucket (Claude's general 7-day limit beside the Fable one)
-  // is always shown; everything else waits behind the toggle.
+  // Claude keeps both shared caps visible before model-specific allowances.
+  // Other providers retain their weekly secondary line and detail toggle.
   const [first, ...rest] = summary.secondary;
   const inline = first && (first.periodHours ?? 0) >= WEEK_HOURS ? first : null;
   const hidden = inline ? rest : summary.secondary;
@@ -274,28 +279,34 @@ function SummaryCard({ section, resolvedTheme, now }: SummaryCardProps) {
 
       {summary.secondary.length > 0 && (
         <div className={styles.secondary}>
-          <div className={styles.secondaryHead}>
-            {inline ? (
-              <SecondaryTotal total={inline} />
-            ) : (
-              <span className={styles.secondaryLabel}>
-                {t('quota_management.ledger_other_windows')}
-              </span>
-            )}
-            {hidden.length > 0 && (
-              <button
-                type="button"
-                className={styles.secondaryToggle}
-                aria-expanded={expanded}
-                onClick={() => setExpanded((value) => !value)}
-              >
-                {expanded
-                  ? t('quota_management.ledger_secondary_hide')
-                  : t('quota_management.ledger_secondary_show')}
-              </button>
-            )}
-          </div>
-          {expanded && hidden.map((total) => <SecondaryTotal key={total.id} total={total} />)}
+          {availability ? (
+            summary.secondary.map((total) => <SecondaryTotal key={total.id} total={total} />)
+          ) : (
+            <>
+              <div className={styles.secondaryHead}>
+                {inline ? (
+                  <SecondaryTotal total={inline} />
+                ) : (
+                  <span className={styles.secondaryLabel}>
+                    {t('quota_management.ledger_other_windows')}
+                  </span>
+                )}
+                {hidden.length > 0 && (
+                  <button
+                    type="button"
+                    className={styles.secondaryToggle}
+                    aria-expanded={expanded}
+                    onClick={() => setExpanded((value) => !value)}
+                  >
+                    {expanded
+                      ? t('quota_management.ledger_secondary_hide')
+                      : t('quota_management.ledger_secondary_show')}
+                  </button>
+                )}
+              </div>
+              {expanded && hidden.map((total) => <SecondaryTotal key={total.id} total={total} />)}
+            </>
+          )}
         </div>
       )}
     </article>
@@ -330,7 +341,24 @@ function LedgerRowItem({ row, name, canRefresh, now, onRefresh }: LedgerRowItemP
   if (row.status === 'success') {
     body =
       row.windows.length > 0 ? (
-        row.windows.map((window) => <WindowCell key={window.id} window={window} now={now} />)
+        row.windows.map((window) => (
+          <WindowCell
+            key={window.id}
+            window={window}
+            now={now}
+            claudeScope={
+              row.entry.type === 'claude' &&
+              window.remaining === 0 &&
+              !CLAUDE_PRIMARY_WINDOW_IDS.some((id) => id === window.id)
+                ? {
+                    availability: getClaudeAvailability(row.windows, now, window.id),
+                    windowLabel: (id) =>
+                      labelText(row.windows.find((item) => item.id === id)?.label ?? { text: id }),
+                  }
+                : undefined
+            }
+          />
+        ))
       ) : (
         <span className={styles.message}>{t('quota_management.ledger_no_windows')}</span>
       );
@@ -393,7 +421,15 @@ function LedgerRowItem({ row, name, canRefresh, now, onRefresh }: LedgerRowItemP
   );
 }
 
-function WindowCell({ window, now }: { window: LedgerWindow; now: number }) {
+function WindowCell({
+  window,
+  now,
+  claudeScope,
+}: {
+  window: LedgerWindow;
+  now: number;
+  claudeScope?: { availability: ClaudeAvailability; windowLabel: (id: string) => string };
+}) {
   const labelText = useLabelText();
   return (
     <div className={styles.window}>
@@ -401,6 +437,14 @@ function WindowCell({ window, now }: { window: LedgerWindow; now: number }) {
         <span className={styles.windowLabel}>{labelText(window.label)}</span>
         <span className={styles.windowValue}>{formatPercent(window.remaining)}</span>
       </div>
+      {claudeScope && (
+        <ClaudeAvailabilityNotice
+          availability={claudeScope.availability}
+          windowLabel={claudeScope.windowLabel}
+          nowMs={now}
+          className={styles.error}
+        />
+      )}
       <div className={styles.bar}>
         <div
           className={`${styles.barFill} ${levelClass(window.remaining)}`}
