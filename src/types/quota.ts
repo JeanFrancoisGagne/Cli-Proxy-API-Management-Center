@@ -109,6 +109,7 @@ export interface ClaudeUsageLimit {
   resets_at?: string | null;
   is_active?: boolean | null;
   scope?: {
+    surface?: string | null;
     model?: {
       id?: string | null;
       display_name?: string | null;

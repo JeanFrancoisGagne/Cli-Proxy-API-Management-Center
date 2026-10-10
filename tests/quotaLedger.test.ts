@@ -104,6 +104,7 @@ const row = (name: string, primary: LedgerWindow | null): LedgerRow => ({
   plan: null,
   windows: primary ? [primary] : [],
   primary,
+  availability: null,
 });
 
 describe('extractLedgerWindows', () => {
@@ -181,6 +182,87 @@ describe('pickPrimaryWindowId', () => {
 });
 
 describe('summary math', () => {
+  test('reports zero usable Claude accounts when shared limits block remaining Fable allowance', () => {
+    const entries = Array.from({ length: 9 }, (_, index) =>
+      entry(`account-${index}.json`, 'claude')
+    );
+    const states = Object.fromEntries(
+      entries.map((item, index) => [
+        item.file.name,
+        claudeQuota(
+          index === 1 ? 4 : index === 5 ? 2 : 0,
+          index === 0 ? 51 : 100,
+          index === 0 ? 100 : 0,
+          index + 1
+        ),
+      ])
+    );
+    const [section] = buildLedgerSections(entries, quotaFor(states), 'reset', NOW);
+    expect(section.summary.primary?.remainingSum).toBe(894);
+    expect(section.summary.availability).toMatchObject({
+      available: 0,
+      blocked: 9,
+      unknown: 0,
+      nextResetAtMs: NOW + 3 * HOUR,
+    });
+    expect(section.rows[0].availability).toEqual({
+      status: 'blocked',
+      windowIds: ['five-hour'],
+      resetAtMs: NOW + 3 * HOUR,
+    });
+    expect(section.summary.availability?.segments.every((segment) => segment.remaining === 0)).toBe(
+      true
+    );
+  });
+
+  test('requires both shared windows and a current model allowance before counting an account', () => {
+    const states = {
+      ready: claudeQuota(5, 20, 0, 2),
+      modelBlocked: claudeQuota(100, 20, 0, 2),
+      bothBlocked: claudeQuota(0, 100, 100, 2),
+      stale: claudeQuota(0, 0, 0, -1),
+      missing: { ...claudeQuota(0, 0, 0, 2), windows: [] },
+      loading: { status: 'loading', windows: [] },
+    };
+    const entries = Object.keys(states).map((name) => entry(name, 'claude'));
+    const [section] = buildLedgerSections(entries, quotaFor(states), 'remaining', NOW);
+    expect(section.summary.availability).toMatchObject({
+      available: 1,
+      blocked: 2,
+      unknown: 3,
+      nextResetAtMs: NOW + 2 * DAY,
+    });
+    expect(section.rows.find((item) => item.key === 'bothBlocked')?.availability).toEqual({
+      status: 'blocked',
+      windowIds: ['five-hour', 'seven-day'],
+      resetAtMs: NOW + 2 * DAY,
+    });
+    expect(section.rows.find((item) => item.key === 'modelBlocked')?.availability).toMatchObject({
+      status: 'blocked',
+      windowIds: ['seven-day-fable'],
+    });
+    expect(section.rows.find((item) => item.key === 'stale')?.availability).toEqual({
+      status: 'unknown',
+    });
+  });
+
+  test('does not invent a recovery time for a blocker without a reset', () => {
+    const quota = claudeQuota(0, 100, 0, 1);
+    quota.windows[1].resetAtMs = null;
+    const [section] = buildLedgerSections(
+      [entry('blocked', 'claude')],
+      quotaFor({ blocked: quota }),
+      'reset',
+      NOW
+    );
+    expect(section.rows[0].availability).toEqual({
+      status: 'blocked',
+      windowIds: ['seven-day'],
+      resetAtMs: null,
+    });
+    expect(section.summary.availability?.nextResetAtMs).toBeNull();
+  });
+
   test('sums remaining percent over 100 per credential', () => {
     const [section] = buildLedgerSections(CLAUDE_ENTRIES, quotaFor(CLAUDE_STATES), 'reset', NOW);
     expect(section.summary.capacity).toBe(500);
@@ -359,6 +441,28 @@ describe('QuotaLedger rendering', () => {
     await i18n.changeLanguage('en');
   });
 
+  test('labels blocked Claude capacity instead of presenting scoped allowance as usable', () => {
+    const entries = [entry('blocked.json', 'claude')];
+    const markup = renderToStaticMarkup(
+      createElement(QuotaLedger, {
+        entries,
+        quotaFor: quotaFor({ 'blocked.json': claudeQuota(0, 100, 0, 1) }) as never,
+        sortMode: 'reset',
+        nameFor: (file: AuthFileItem) => file.name,
+        resolvedTheme: 'dark',
+        canRefresh: true,
+        onRefresh: () => {},
+        now: NOW,
+      })
+    );
+    expect(markup).toContain('Usable accounts');
+    expect(markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).toContain('0 of 1');
+    expect(markup).toContain('1 blocked');
+    expect(markup).toContain('Included quota blocked: 7-day limit');
+    expect(markup).toContain('Allowance remaining');
+    expect(markup).not.toContain('of 100%');
+  });
+
   test('renders the summary figure, masked names, plans and reset lines', () => {
     const markup = renderToStaticMarkup(
       createElement(QuotaLedger, {
@@ -374,7 +478,8 @@ describe('QuotaLedger rendering', () => {
     );
 
     expect(markup).toContain('409%');
-    expect(markup).toContain('of 500%');
+    expect(markup).toContain('of 5');
+    expect(markup).toContain('Usable accounts');
     expect(markup).toContain('7-day limit');
     expect(markup).toContain('454%');
     expect(markup).toContain('5 credentials');

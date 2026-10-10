@@ -9,6 +9,80 @@ const modernReset = '2026-07-27T10:00:00.000000+00:00';
 const legacyReset = '2026-07-28T10:00:00.000000+00:00';
 
 describe('Claude Fable quota', () => {
+  test('prefers valid shared limits over stale named fields without duplicating windows', () => {
+    const windows = buildClaudeQuotaWindows(
+      {
+        five_hour: { utilization: 1, resets_at: legacyReset },
+        seven_day: { utilization: 2, resets_at: legacyReset },
+        limits: [
+          { kind: 'session', percent: 100, resets_at: modernReset, scope: null },
+          {
+            kind: 'weekly_all',
+            percent: 51,
+            resets_at: modernReset,
+            scope: { model: null, surface: null },
+          },
+        ],
+      },
+      t
+    );
+    expect(windows.map(({ id, usedPercent }) => [id, usedPercent])).toEqual([
+      ['five-hour', 100],
+      ['seven-day', 51],
+    ]);
+  });
+
+  test('does not treat a scoped session limit as a shared blocker', () => {
+    const windows = buildClaudeQuotaWindows(
+      {
+        five_hour: { utilization: 1, resets_at: legacyReset },
+        seven_day: { utilization: 2, resets_at: legacyReset },
+        limits: [
+          { kind: 'session', percent: 100, resets_at: modernReset, scope: { surface: 'cowork' } },
+          { kind: 'weekly_all', percent: Number.NaN, resets_at: modernReset, scope: null },
+        ],
+      },
+      t
+    );
+    expect(windows.map(({ id, usedPercent }) => [id, usedPercent])).toEqual([
+      ['five-hour', 1],
+      ['seven-day', 2],
+    ]);
+  });
+
+  test('reads the shared session and weekly limits beside the scoped model allowance', () => {
+    const windows = buildClaudeQuotaWindows(
+      {
+        limits: [
+          { kind: 'session', percent: 100, resets_at: modernReset, is_active: true, scope: null },
+          {
+            kind: 'weekly_all',
+            percent: 51,
+            resets_at: legacyReset,
+            is_active: false,
+            scope: null,
+          },
+          {
+            kind: 'weekly_scoped',
+            percent: 0,
+            resets_at: legacyReset,
+            is_active: false,
+            scope: { model: { id: null, display_name: 'Fable' } },
+          },
+        ],
+      },
+      t
+    );
+
+    expect(
+      windows.map(({ id, usedPercent, resetAtMs }) => ({ id, usedPercent, resetAtMs }))
+    ).toEqual([
+      { id: 'five-hour', usedPercent: 100, resetAtMs: Date.parse(modernReset) },
+      { id: 'seven-day', usedPercent: 51, resetAtMs: Date.parse(legacyReset) },
+      { id: 'seven-day-fable', usedPercent: 0, resetAtMs: Date.parse(legacyReset) },
+    ]);
+  });
+
   test('builds a Fable window from the modern scoped limits payload', () => {
     const windows = buildClaudeQuotaWindows(
       {

@@ -1,10 +1,9 @@
 /**
  * Quota ledger view: one summary card per provider, then one row per credential.
  *
- * The summary card sums remaining weekly quota across a provider's accounts
- * ("409% of 500%") with one bar segment per account. The rows below show each
- * account's windows side by side, ordered so the account whose weekly quota is
- * lost first comes first (see ledger.ts).
+ * Claude counts accounts with usable included allowance; other providers sum
+ * their headline windows. Rows retain raw allowances and show Claude blockers
+ * beside them, so a scoped model allowance cannot imply usable shared quota.
  */
 
 import { useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
@@ -34,6 +33,7 @@ import type { QuotaFileEntry } from '../logic';
 import { QUOTA_ADAPTERS, type QuotaCardState } from '../providers';
 import type { QuotaProviderType } from '../providers/types';
 import styles from './QuotaLedger.module.scss';
+import { ClaudeAvailabilityNotice } from '../providers/claude/ClaudeAvailabilityNotice';
 
 const WEEK_HOURS = 24 * 7;
 
@@ -194,6 +194,7 @@ function SummaryCard({ section, resolvedTheme, now }: SummaryCardProps) {
   const [expanded, setExpanded] = useState(false);
   const { summary } = section;
   const primary = summary.primary;
+  const availability = summary.availability;
 
   // A second weekly bucket (Claude's general 7-day limit beside the Fable one)
   // is always shown; everything else waits behind the toggle.
@@ -212,17 +213,34 @@ function SummaryCard({ section, resolvedTheme, now }: SummaryCardProps) {
       </header>
 
       <div className={styles.cardLabel}>
-        {primary ? labelText(primary.label) : t('quota_management.ledger_weekly_fallback')}
+        {availability
+          ? `${t('claude_quota.usable_accounts')} · ${primary ? labelText(primary.label) : t('claude_quota.included_allowance')}`
+          : primary
+            ? labelText(primary.label)
+            : t('quota_management.ledger_weekly_fallback')}
       </div>
       <div className={styles.cardFigure}>
-        <span className={styles.cardValue}>{formatPercent(primary?.remainingSum ?? null)}</span>
+        <span className={styles.cardValue}>
+          {availability ? availability.available : formatPercent(primary?.remainingSum ?? null)}
+        </span>
         <span className={styles.cardCapacity}>
-          {t('quota_management.ledger_of_capacity', { capacity: summary.capacity })}
+          {availability
+            ? t('claude_quota.of_accounts', { total: summary.credentials })
+            : t('quota_management.ledger_of_capacity', { capacity: summary.capacity })}
         </span>
       </div>
+      {availability && (
+        <div className={styles.cardLabel}>
+          {t('claude_quota.included_allowance')} ·{' '}
+          {t('claude_quota.availability_counts', {
+            blocked: availability.blocked,
+            unknown: availability.unknown,
+          })}
+        </div>
+      )}
 
       <div className={styles.segments} aria-hidden="true">
-        {summary.segments.map((segment) => (
+        {(availability?.segments ?? summary.segments).map((segment) => (
           <span key={segment.key} className={styles.segment}>
             <span
               className={`${styles.segmentFill} ${levelClass(segment.remaining)}`}
@@ -233,8 +251,26 @@ function SummaryCard({ section, resolvedTheme, now }: SummaryCardProps) {
       </div>
 
       <div className={styles.cardReset}>
-        <ResetLine atMs={primary?.soonestResetMs ?? null} now={now} />
+        {availability && availability.blocked > 0 ? (
+          <>
+            {t('claude_quota.included_reset')}:{' '}
+            {availability.nextResetAtMs === null ? (
+              t('claude_quota.included_reset_unknown')
+            ) : (
+              <ResetLine atMs={availability.nextResetAtMs} now={now} />
+            )}
+          </>
+        ) : (
+          <ResetLine atMs={primary?.soonestResetMs ?? null} now={now} />
+        )}
       </div>
+
+      {availability && primary && (
+        <div className={styles.cardLabel}>
+          {t('claude_quota.allowance_remaining')}: {labelText(primary.label)}{' '}
+          {formatPercent(primary.remainingSum)}
+        </div>
+      )}
 
       {summary.secondary.length > 0 && (
         <div className={styles.secondary}>
@@ -326,6 +362,17 @@ function LedgerRowItem({ row, name, canRefresh, now, onRefresh }: LedgerRowItemP
           {name}
         </span>
         {row.plan && <span className={styles.plan}>{labelText(row.plan)}</span>}
+        {row.status === 'success' && row.availability && (
+          <ClaudeAvailabilityNotice
+            availability={row.availability}
+            windowLabel={(id) => {
+              const window = row.windows.find((candidate) => candidate.id === id);
+              return window ? labelText(window.label) : id;
+            }}
+            nowMs={now}
+            className={styles.error}
+          />
+        )}
       </div>
       <div className={styles.windows}>{body}</div>
       <button

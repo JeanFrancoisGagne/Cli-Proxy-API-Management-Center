@@ -228,6 +228,111 @@ describe('KimiQuotaBody', () => {
 });
 
 describe('ClaudeQuotaBody', () => {
+  for (const sessionUsed of [0, 100]) {
+    test(`includes the scoped model blocker when shared session usage is ${sessionUsed}%`, () => {
+      const quota: ClaudeQuotaState = {
+        status: 'success',
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour',
+            usedPercent: sessionUsed,
+            resetLabel: '-',
+            resetAtMs: now + HOUR_MS,
+          },
+          {
+            id: 'seven-day',
+            label: '7-day',
+            usedPercent: 20,
+            resetLabel: '-',
+            resetAtMs: now + 4 * DAY_MS,
+          },
+          {
+            id: 'seven-day-fable',
+            label: 'Fable',
+            usedPercent: 100,
+            resetLabel: '-',
+            resetAtMs: now + 2 * DAY_MS,
+          },
+        ],
+      };
+      const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+      expect(markup).toContain(
+        `Included quota blocked: ${sessionUsed === 100 ? '5-hour, ' : ''}Fable`
+      );
+      expect(markup).toMatch(/Next blocking reset: [^<]*2 days/);
+    });
+  }
+
+  for (const locale of ['en', 'zh-CN', 'zh-TW', 'ru']) {
+    test(`shows the shared blocker beside remaining model allowance in ${locale}`, async () => {
+      await i18n.changeLanguage(locale);
+      const quota: ClaudeQuotaState = {
+        status: 'success',
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            labelKey: 'claude_quota.five_hour',
+            usedPercent: 100,
+            resetLabel: '-',
+            resetAtMs: now + 2 * HOUR_MS,
+          },
+          {
+            id: 'seven-day',
+            label: '7-day limit',
+            labelKey: 'claude_quota.seven_day',
+            usedPercent: 51,
+            resetLabel: '-',
+            resetAtMs: now + 4 * DAY_MS,
+          },
+          {
+            id: 'seven-day-fable',
+            label: 'Fable',
+            usedPercent: 0,
+            resetLabel: '-',
+            resetAtMs: now + 4 * DAY_MS,
+          },
+        ],
+        extraUsage: { is_enabled: true, monthly_limit: 1000, used_credits: 100, utilization: 10 },
+      };
+      const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+      expect(markup).toContain(
+        i18n.t('claude_quota.included_blocked', { windows: i18n.t('claude_quota.five_hour') })
+      );
+      expect(markup).toContain(formatInstantShort(now + 2 * HOUR_MS));
+      expect(markup).toContain('100%');
+      expect(markup).toContain('$1.00 / $10.00');
+      expect(markup).not.toContain('claude_quota.included_');
+      await i18n.changeLanguage('en');
+    });
+  }
+
+  test('requires a refresh after a cached shared reset passes', () => {
+    const quota: ClaudeQuotaState = {
+      status: 'success',
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour',
+          usedPercent: 100,
+          resetLabel: '-',
+          resetAtMs: now - HOUR_MS,
+        },
+        {
+          id: 'seven-day',
+          label: '7-day',
+          usedPercent: 20,
+          resetLabel: '-',
+          resetAtMs: now + DAY_MS,
+        },
+      ],
+    };
+    const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+    expect(markup).toContain('Availability unknown. Refresh quota.');
+    expect(markup).not.toContain('Included quota blocked');
+  });
+
   test('pairs each window reset with a countdown', () => {
     const quota: ClaudeQuotaState = {
       status: 'success',

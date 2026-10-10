@@ -10,6 +10,7 @@ import type {
   ClaudeProfileResponse,
   ClaudeQuotaState,
   ClaudeQuotaWindow,
+  ClaudeUsageLimit,
   ClaudeUsagePayload,
 } from '@/types';
 import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
@@ -37,16 +38,19 @@ export type ClaudeQuotaData = {
   planType?: string | null;
 };
 
-const findFableUsageLimit = (payload: ClaudeUsagePayload) => {
+const findUsageLimit = (
+  payload: ClaudeUsagePayload,
+  kind: string,
+  matchesScope: (limit: ClaudeUsageLimit) => boolean
+) => {
   if (!Array.isArray(payload.limits)) return null;
 
   const candidates = payload.limits.filter((limit) => {
-    const kind = (normalizeStringValue(limit?.kind) ?? '').trim().toLowerCase();
-    const modelName = (normalizeStringValue(limit?.scope?.model?.display_name) ?? '')
-      .trim()
-      .toLowerCase();
-    const isFable = modelName === 'fable' || modelName === 'fable 5';
-    return kind === 'weekly_scoped' && isFable && normalizeNumberValue(limit?.percent) !== null;
+    return (
+      (normalizeStringValue(limit?.kind) ?? '').trim().toLowerCase() === kind &&
+      matchesScope(limit) &&
+      normalizeNumberValue(limit?.percent) !== null
+    );
   });
 
   return candidates.find((limit) => limit.is_active === true) ?? candidates[0] ?? null;
@@ -57,15 +61,28 @@ export const buildClaudeQuotaWindows = (
   t: TFunction
 ): ClaudeQuotaWindow[] => {
   const windows: ClaudeQuotaWindow[] = [];
-  const fableLimit = findFableUsageLimit(payload);
+  const fableLimit = findUsageLimit(payload, 'weekly_scoped', (limit) => {
+    const modelName = (normalizeStringValue(limit?.scope?.model?.display_name) ?? '')
+      .trim()
+      .toLowerCase();
+    return modelName === 'fable' || modelName === 'fable 5';
+  });
+  const sharedScope = (limit: ClaudeUsageLimit) =>
+    limit.scope?.model == null && limit.scope?.surface == null;
+  const sessionLimit = findUsageLimit(payload, 'session', sharedScope);
+  const weeklyLimit = findUsageLimit(payload, 'weekly_all', sharedScope);
 
   for (const { key, id, labelKey } of CLAUDE_USAGE_WINDOW_KEYS) {
     if (key === 'iguana_necktie' && fableLimit) continue;
-    const window = payload[key as keyof ClaudeUsagePayload];
-    if (!window || typeof window !== 'object' || !('utilization' in window)) continue;
-    const typedWindow = window as { utilization: number; resets_at: string | null };
-    const usedPercent = normalizeNumberValue(typedWindow.utilization);
-    const resetLabel = formatQuotaResetTime(typedWindow.resets_at ?? undefined);
+    const modernLimit =
+      key === 'five_hour' ? sessionLimit : key === 'seven_day' ? weeklyLimit : null;
+    const window = payload[key];
+    if (!modernLimit && (!window || typeof window !== 'object')) continue;
+    const usedPercent = normalizeNumberValue(
+      modernLimit ? modernLimit.percent : window?.utilization
+    );
+    const resetAt = modernLimit ? modernLimit.resets_at : window?.resets_at;
+    const resetLabel = formatQuotaResetTime(resetAt ?? undefined);
     windows.push({
       id,
       label: t(labelKey),
@@ -74,7 +91,7 @@ export const buildClaudeQuotaWindows = (
       resetLabel,
       // Claude states the period nowhere in the payload, so it comes from the
       // key: `five_hour` is the rolling window, everything else is weekly.
-      resetAtMs: resolveResetMs([typedWindow.resets_at]),
+      resetAtMs: resolveResetMs([resetAt]),
       periodHours: claudePeriodHours(key),
     });
   }

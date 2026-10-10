@@ -18,6 +18,13 @@ import type { QuotaFileEntry } from './logic';
 import type { QuotaProviderType } from './providers/types';
 import { getQuotaCacheKey } from '@/utils/quota/identity';
 import { codexPlanLabelKey } from '@/utils/quota/planTier';
+import {
+  CLAUDE_PRIMARY_WINDOW_IDS,
+  getClaudeAvailability,
+  summarizeClaudeAvailability,
+  type ClaudeAvailability,
+  type ClaudeAvailabilitySummary,
+} from './providers/claude/availability';
 
 /** Ledger row order: soonest weekly reset first, or most remaining weekly quota first. */
 export type LedgerSortMode = 'reset' | 'remaining';
@@ -53,6 +60,8 @@ export interface LedgerRow {
   windows: LedgerWindow[];
   /** This credential's headline window, or null when it does not report one. */
   primary: LedgerWindow | null;
+  /** Included Claude allowance for the headline model; null for other providers. */
+  availability: ClaudeAvailability | null;
 }
 
 /** One window summed across a provider's credentials. */
@@ -83,6 +92,7 @@ export interface LedgerSummary {
   segments: LedgerSegment[];
   /** Other windows: weekly or longer first, then shorter ones. */
   secondary: LedgerWindowTotal[];
+  availability: ClaudeAvailabilitySummary | null;
 }
 
 export interface LedgerSection {
@@ -101,7 +111,7 @@ const WEEK_HOURS = 24 * 7;
  * so every row and the summary card compare the same window.
  */
 const PRIMARY_WINDOW_IDS: Partial<Record<QuotaProviderType, readonly string[]>> = {
-  claude: ['seven-day-fable', 'seven-day'],
+  claude: CLAUDE_PRIMARY_WINDOW_IDS,
   codex: ['weekly', 'monthly'],
   devin: ['weekly', 'daily'],
   kimi: ['summary', 'monthly'],
@@ -443,10 +453,9 @@ const totalFor = (
 /**
  * Sum one provider's credentials into its summary card.
  *
- * The headline reads as "409% of 500%": remaining percent summed across
- * credentials over 100 per credential. A credential that has not loaded adds
- * nothing to the sum but still counts toward the ceiling, so the gap between
- * the two numbers never hides an account.
+ * Claude counts accounts whose shared and headline-model allowances permit
+ * use. Its window totals remain allowance detail: different budgets cannot be
+ * added or compared to produce effective token capacity.
  */
 export function summarizeLedger(
   provider: QuotaProviderType,
@@ -479,6 +488,7 @@ export function summarizeLedger(
     primary: primaryId === null ? null : totalFor(primaryId, rows, nowMs),
     segments: rows.map((row) => ({ key: row.key, remaining: row.primary?.remaining ?? null })),
     secondary,
+    availability: provider === 'claude' ? summarizeClaudeAvailability(rows) : null,
   };
 }
 
@@ -535,6 +545,8 @@ export function buildLedgerSections(
         plan: resolveLedgerPlan(provider, quota),
         windows: primary ? [primary, ...windows.filter((window) => window !== primary)] : windows,
         primary,
+        availability:
+          provider === 'claude' ? getClaudeAvailability(windows, nowMs, primaryId) : null,
       };
     });
 
