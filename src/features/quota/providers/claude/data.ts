@@ -13,11 +13,9 @@ import type {
   ClaudeUsageLimit,
   ClaudeUsagePayload,
 } from '@/types';
-import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
+import { getApiCallErrorMessage } from '@/services/api';
+import { readClaudeAccount } from '@/services/api/claudeAccountReads';
 import {
-  CLAUDE_PROFILE_URL,
-  CLAUDE_USAGE_URL,
-  CLAUDE_REQUEST_HEADERS,
   CLAUDE_USAGE_WINDOW_KEYS,
   claudePeriodHours,
   normalizeNumberValue,
@@ -179,18 +177,8 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
   }
 
   const [usageResult, profileResult] = await Promise.allSettled([
-    apiCallApi.request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_USAGE_URL,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    }),
-    apiCallApi.request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_PROFILE_URL,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    }),
+    readClaudeAccount(authIndex, 'usage'),
+    readClaudeAccount(authIndex, 'profile'),
   ]);
 
   if (usageResult.status === 'rejected') {

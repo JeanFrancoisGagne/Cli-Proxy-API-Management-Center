@@ -9,6 +9,7 @@ import {
   type AnthropicResetGrantStatus,
 } from '@/services/api/claudeResetGrants';
 import type { AuthFileItem } from '@/types';
+import type { QuotaCardState } from '../index';
 import { normalizeAuthIndex } from '@/utils/quota';
 import { resetGrantOperations, RETRY_WINDOW_MS } from './resetGrantOperations';
 import { selectResetGrant } from './selectResetGrant';
@@ -18,7 +19,7 @@ export function useClaudeResetGrants(
   file: AuthFileItem,
   enabled: boolean,
   disabled: boolean,
-  refreshToken: unknown,
+  quota: QuotaCardState | undefined,
   onRefresh: () => void
 ) {
   const { t } = useTranslation();
@@ -40,7 +41,8 @@ export function useClaudeResetGrants(
   useEffect(() => {
     const version = ++generation.current;
     setStatus(null);
-    if (!enabled || disabled || !sessionActive || !authIndex) return;
+    // Failed quota reads must not send a second usage request for reset grants.
+    if (!enabled || quota?.status !== 'success' || disabled || !sessionActive || !authIndex) return;
     let cancelled = false;
     const current = () =>
       !cancelled && version === generation.current && session === apiClient.getConnectionRevision();
@@ -59,7 +61,7 @@ export function useClaudeResetGrants(
       cancelled = true;
       generation.current += 1;
     };
-  }, [authIndex, key, enabled, disabled, sessionActive, session, refreshToken, reload]);
+  }, [authIndex, key, enabled, disabled, sessionActive, session, quota, reload]);
 
   const operation = resetGrantOperations.inspect(key);
   const pending = operation && !operation.code ? operation : undefined;

@@ -16,6 +16,7 @@ import {
 } from '@/utils/recentRequests';
 import { parseTimestampMs } from '@/utils/timestamp';
 import { normalizeAuthFileCooldowns, normalizeCooldownTimestamp } from './authFileCooldowns';
+import { observeClaudeCredentials } from './claudeAccountReads';
 
 type AuthFileStatusResponse = { status: string; disabled: boolean };
 export type AuthFileLookup = { name: string; authIndex?: string };
@@ -520,14 +521,39 @@ export interface AuthFileCooldownResetResponse {
   models: string[];
 }
 
+let latestFullInventoryRequest = 0;
+
 export const authFilesApi = {
-  list: async (lookup?: AuthFileLookup) =>
-    normalizeAuthFilesResponse(
-      await apiClient.get<AuthFilesResponse>(
-        '/credentials',
-        lookup ? { params: { name: lookup.name, auth_index: lookup.authIndex } } : undefined
-      )
-    ),
+  list: async (lookup?: AuthFileLookup) => {
+    const revision = apiClient.getConnectionRevision();
+    const request = lookup ? undefined : ++latestFullInventoryRequest;
+    const payload = await apiClient.get<AuthFilesResponse>(
+      '/credentials',
+      lookup ? { params: { name: lookup.name, auth_index: lookup.authIndex } } : undefined
+    );
+    const normalized = normalizeAuthFilesResponse(payload);
+    if (
+      Array.isArray(payload?.files) &&
+      request !== undefined &&
+      request === latestFullInventoryRequest &&
+      revision === apiClient.getConnectionRevision()
+    ) {
+      observeClaudeCredentials(
+        normalized.files.flatMap((file) => {
+          const authIndex = normalizeRecentRequestAuthIndex(file.authIndex);
+          const provider = file.type ?? file.provider;
+          if (typeof provider !== 'string' || provider.toLowerCase() !== 'claude' || !authIndex) {
+            return [];
+          }
+          const value = file.last_refresh;
+          const lastRefresh =
+            typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
+          return [{ authIndex, lastRefresh }];
+        })
+      );
+    }
+    return normalized;
+  },
 
   setStatus: (name: string, disabled: boolean, authIndex?: string) =>
     apiClient.patch<AuthFileStatusResponse>('/credentials/status', {

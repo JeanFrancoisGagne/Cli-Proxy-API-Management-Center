@@ -1,11 +1,10 @@
 // Upstream cedar_ember contract, following opencodex anthropic-reset-grants.
 import { apiCallApi } from './apiCall';
+import { readClaudeAccount } from './claudeAccountReads';
 import { CLAUDE_REQUEST_HEADERS } from '@/utils/quota/constants';
 
 export const ANTHROPIC_API_ORIGIN = 'https://api.anthropic.com';
 export const ANTHROPIC_RESET_GRANT_PROGRAM = 'cedar_ember';
-export const ANTHROPIC_RESET_GRANT_STATUS_PATH = '/api/oauth/usage?cedar_ember=1&skip_spend=1';
-export const ANTHROPIC_PROFILE_PATH = '/api/oauth/profile';
 /** Same bound the Claude Code client uses for the claim. */
 export const ANTHROPIC_RESET_GRANT_REDEEM_TIMEOUT_MS = 25_000;
 
@@ -235,16 +234,11 @@ export function anthropicResetGrantBlocker(
   return null;
 }
 
-async function readAccount(authIndex: string, path: string): Promise<Record<string, unknown>> {
-  const response = await apiCallApi.request(
-    {
-      authIndex,
-      method: 'GET',
-      url: ANTHROPIC_API_ORIGIN + path,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    },
-    { timeout: 12000 }
-  );
+async function readAccount(
+  authIndex: string,
+  kind: 'reset-grants' | 'profile'
+): Promise<Record<string, unknown>> {
+  const response = await readClaudeAccount(authIndex, kind);
   if (response.statusCode < 200 || response.statusCode >= 300 || !isRecord(response.body)) {
     throw new AnthropicResetGrantError('upstream');
   }
@@ -252,14 +246,14 @@ async function readAccount(authIndex: string, path: string): Promise<Record<stri
 }
 
 export async function readClaudeResetGrants(authIndex: string) {
-  const body = await readAccount(authIndex, ANTHROPIC_RESET_GRANT_STATUS_PATH);
+  const body = await readAccount(authIndex, 'reset-grants');
   const status = parseAnthropicResetGrantStatus(body.cedar_ember);
   if (!status) throw new AnthropicResetGrantError('malformed');
   return status;
 }
 
 export async function readClaudeOrganization(authIndex: string) {
-  const body = await readAccount(authIndex, ANTHROPIC_PROFILE_PATH);
+  const body = await readAccount(authIndex, 'profile');
   const uuid = isRecord(body.organization) ? body.organization.uuid : undefined;
   if (typeof uuid !== 'string' || !ORGANIZATION_UUID_RE.test(uuid)) {
     throw new AnthropicResetGrantError('malformed');
